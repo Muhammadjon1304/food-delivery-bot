@@ -17,6 +17,8 @@ func GetMealByName(db *sql.DB, name string) (*models.Meal, error) {
 	return &meal, nil
 }
 
+// In internal/db/order.go, update the SaveOrder function:
+
 func SaveOrder(db *sql.DB, order *models.Order) error {
 	tx, err := db.Begin()
 	if err != nil {
@@ -43,8 +45,9 @@ func SaveOrder(db *sql.DB, order *models.Order) error {
 		order.ID = uuid.New().String()
 	}
 
-	// Insert order into orders table
-	_, err = tx.Exec("INSERT INTO orders (id, user_id, comment) VALUES ($1, $2, $3);", order.ID, order.User.ID, order.Comment)
+	// Insert order into orders table (now with location)
+	_, err = tx.Exec("INSERT INTO orders (id, user_id, comment, location) VALUES ($1, $2, $3, $4);",
+		order.ID, order.User.ID, order.Comment, order.Location)
 	if err != nil {
 		tx.Rollback()
 		return err

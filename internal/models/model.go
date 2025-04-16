@@ -27,10 +27,12 @@ type OrderMeal struct {
 }
 
 type Order struct {
-	ID        string
-	User      User
-	OrderMeal []OrderMeal
-	Comment   string
+	ID               string
+	User             User
+	OrderMeal        []OrderMeal
+	Comment          string
+	Location         string
+	AwaitingLocation bool
 }
 
 func (o *Order) Save(db *sql.DB) error {

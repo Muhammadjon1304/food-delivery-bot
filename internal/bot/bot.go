@@ -59,6 +59,11 @@ func StartBot(botToken string, db *sql.DB) {
 			continue
 		}
 
+		if update.Message.Location != nil {
+			handleLocation(bot, update, db)
+			continue
+		}
+
 		orderMutex.Lock()
 		order, ordering := pendingOrders[telegramID]
 		orderMutex.Unlock()
@@ -423,11 +428,98 @@ func handleOrderConfirmation(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *s
 	orderSummary += fmt.Sprintf("\n💰 *Total Price:* %d UZS", totalPrice)
 
 	// Send confirmation message to user
-	msg := tgbotapi.NewMessage(update.Message.Chat.ID, "✅ Your order has been confirmed! We will notify you when it's ready.")
+	msg := tgbotapi.NewMessage(update.Message.Chat.ID, "✅ Your order has been confirmed! Now, please share your delivery location.")
+
+	// Create a keyboard with the location button
+	locationButton := tgbotapi.NewKeyboardButtonLocation("📍 Share Location")
+	replyMarkup := tgbotapi.NewReplyKeyboard(
+		tgbotapi.NewKeyboardButtonRow(locationButton),
+	)
+	msg.ReplyMarkup = replyMarkup
+	bot.Send(msg)
+
+	// Save order information temporarily until we get the location
+	// Can't directly modify a field of a struct in a map
+	orderMutex.Lock()
+	order.AwaitingLocation = true     // Set the flag before storing
+	pendingOrders[telegramID] = order // Store the updated order
+	orderMutex.Unlock()
+}
+
+func handleLocation(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *sql.DB) {
+	telegramID := update.Message.From.ID
+
+	orderMutex.Lock()
+	order, exists := pendingOrders[telegramID]
+	orderMutex.Unlock()
+
+	if !exists || !order.AwaitingLocation {
+		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "⚠️ No pending order found that requires location.")
+		bot.Send(msg)
+		return
+	}
+
+	// Save the location coordinates
+	lat := update.Message.Location.Latitude
+	lon := update.Message.Location.Longitude
+	locationString := fmt.Sprintf("%.6f,%.6f", lat, lon)
+
+	// Update the order with location
+	orderMutex.Lock()
+	order.Location = locationString   // Update the local copy
+	pendingOrders[telegramID] = order // Store it back in the map
+	orderMutex.Unlock()
+
+	// Fetch user's name and phone number from database
+	var fullName, phoneNumber string
+	err := db.QueryRow("SELECT name, phone_number FROM users WHERE telegram_id = $1", telegramID).Scan(&fullName, &phoneNumber)
+	if err != nil {
+		fullName = update.Message.From.FirstName // Fallback to Telegram name
+		phoneNumber = "Not provided"
+	}
+
+	// Calculate total price
+	totalPrice := 0
+	orderSummary := fmt.Sprintf("🛒 *New Order Received*\n👤 *Customer:* %s\n📞 *Phone:* %s\n\n", fullName, phoneNumber)
+	for _, item := range order.OrderMeal {
+		itemTotal := item.Quantity * item.Meal.Price
+		totalPrice += itemTotal
+		orderSummary += fmt.Sprintf("- %d x %s: %d UZS\n", item.Quantity, item.Meal.Name, itemTotal)
+	}
+	orderSummary += fmt.Sprintf("\n💰 *Total Price:* %d UZS", totalPrice)
+	orderSummary += fmt.Sprintf("\n📍 *Delivery Location:* [Map](https://maps.google.com/maps?q=%s)", locationString)
+
+	// Send confirmation to user
+	msg := tgbotapi.NewMessage(update.Message.Chat.ID, "🚚 Thank you! Your delivery is on the way. We'll update you when your food is ready.")
+
+	// Reset to normal menu
+	replyMarkup := tgbotapi.NewReplyKeyboard(
+		tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton("📜 Menu"),
+			tgbotapi.NewKeyboardButton("🛒 Order"),
+		),
+	)
+	msg.ReplyMarkup = replyMarkup
 	bot.Send(msg)
 
 	// Send order details to admin group
 	adminMsg := tgbotapi.NewMessage(adminGroupID, orderSummary)
 	adminMsg.ParseMode = "Markdown"
 	bot.Send(adminMsg)
+
+	// Remove from pending orders
+	orderMutex.Lock()
+	delete(pendingOrders, telegramID)
+	orderMutex.Unlock()
+
+	// Save order to database (you'd need to update your DB schema and functions to include location)
+	saveOrderWithLocation(db, order)
+}
+
+func saveOrderWithLocation(db *sql.DB, order models.Order) {
+	// Implementation to save the order with location to the database
+	// This would require updating your DB schema to include a location field
+
+	// For now, we'll just use the existing SaveOrder function
+	psDB.SaveOrder(db, &order)
 }
