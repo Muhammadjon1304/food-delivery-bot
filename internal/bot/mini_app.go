@@ -1,4 +1,4 @@
-// This file should be placed in internal/bot/mini_app.go
+// internal/bot/mini_app.go
 
 package bot
 
@@ -10,6 +10,7 @@ import (
 	"food_delivery/internal/models"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"log"
+	"net/http"
 )
 
 // MiniAppOrderData represents the data structure received from the Mini App
@@ -26,28 +27,45 @@ type MiniAppOrderData struct {
 	} `json:"contactInfo"`
 }
 
-// HandleMiniAppData processes data received from the Telegram Mini App
-func HandleMiniAppData(bot *tgbotapi.BotAPI, update tgbotapi.Update, database *sql.DB) {
-	// Extract data from the WebApp
-	webAppData := update.Message.WebAppData
-	if webAppData == nil {
-		log.Println("No web app data received")
-		return
-	}
+// SetupMiniAppWebhook sets up an HTTP handler for Mini App data
+func SetupMiniAppWebhook(bot *tgbotapi.BotAPI, database *sql.DB) {
+	http.HandleFunc("/mini-app-webhook", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Only POST method is allowed", http.StatusMethodNotAllowed)
+			return
+		}
 
-	// Parse the data
-	var orderData MiniAppOrderData
-	err := json.Unmarshal([]byte(webAppData.Data), &orderData)
-	if err != nil {
-		log.Printf("Error parsing mini app data: %v", err)
-		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "❌ Error processing your order. Please try again.")
-		bot.Send(msg)
-		return
-	}
+		// Parse the JSON request
+		var orderData MiniAppOrderData
+		decoder := json.NewDecoder(r.Body)
+		if err := decoder.Decode(&orderData); err != nil {
+			log.Printf("Error parsing mini app data: %v", err)
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
 
-	// Log the received data
-	log.Printf("Received order from Mini App: %+v", orderData)
+		// Log the received data
+		log.Printf("Received order from Mini App: %+v", orderData)
 
+		// Process the order (similar to your existing HandleMiniAppData function)
+		processOrderFromMiniApp(bot, database, orderData)
+
+		// Send a success response
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"success"}`))
+	})
+
+	// Start the HTTP server
+	go func() {
+		log.Println("Starting Mini App webhook server on :8080")
+		if err := http.ListenAndServe(":8080", nil); err != nil {
+			log.Fatalf("Failed to start server: %v", err)
+		}
+	}()
+}
+
+// processOrderFromMiniApp processes the order data received from the Mini App
+func processOrderFromMiniApp(bot *tgbotapi.BotAPI, database *sql.DB, orderData MiniAppOrderData) {
 	// Create an order from the received data
 	order := models.Order{
 		User: models.User{
@@ -79,23 +97,23 @@ func HandleMiniAppData(bot *tgbotapi.BotAPI, update tgbotapi.Update, database *s
 	}
 
 	// Save the order
-	err = db.SaveOrder(database, &order)
+	err := db.SaveOrder(database, &order)
 	if err != nil {
 		log.Printf("Error saving order: %v", err)
-		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "❌ Failed to save your order. Please try again.")
+		// Send error message to user
+		msg := tgbotapi.NewMessage(orderData.UserTelegramId, "❌ Failed to save your order. Please try again.")
 		bot.Send(msg)
 		return
 	}
 
 	// Send confirmation to user
-	msg := tgbotapi.NewMessage(update.Message.Chat.ID, "✅ Your order has been placed successfully! We'll process it and deliver to your address soon.")
+	msg := tgbotapi.NewMessage(orderData.UserTelegramId, "✅ Your order has been placed successfully! We'll process it and deliver to your address soon.")
 	bot.Send(msg)
 
-	// Send notification to admin group
-	// Calculate total price
+	// Calculate total price for admin notification
 	totalPrice := 0
-	orderSummary := fmt.Sprintf("🛒 *New Order via Mini App*\n👤 *Customer:* %s\n📞 *Phone:* %s\n📍 *Address:* %s\n\n",
-		update.Message.From.FirstName,
+	orderSummary := fmt.Sprintf("🛒 *New Order via Mini App*\n👤 *Customer ID:* %d\n📞 *Phone:* %s\n📍 *Address:* %s\n\n",
+		orderData.UserTelegramId,
 		orderData.ContactInfo.PhoneNumber,
 		orderData.ContactInfo.Address)
 
@@ -111,7 +129,16 @@ func HandleMiniAppData(bot *tgbotapi.BotAPI, update tgbotapi.Update, database *s
 
 	orderSummary += fmt.Sprintf("\n💰 *Total Price:* %d UZS", totalPrice)
 
+	// Send notification to admin group
 	adminMsg := tgbotapi.NewMessage(adminGroupID, orderSummary)
 	adminMsg.ParseMode = "Markdown"
 	bot.Send(adminMsg)
+}
+
+// AddMiniAppButton adds a Mini App button to an inline keyboard
+func AddMiniAppButton(keyboard *tgbotapi.InlineKeyboardMarkup, text, url string) {
+	row := tgbotapi.NewInlineKeyboardRow(
+		tgbotapi.NewInlineKeyboardButtonURL(text, url),
+	)
+	keyboard.InlineKeyboard = append(keyboard.InlineKeyboard, row)
 }

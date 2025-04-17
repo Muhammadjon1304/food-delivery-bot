@@ -31,6 +31,19 @@ var availableMeals = map[string]models.Meal{
 	"Sho'rva":  {Name: "Sho'rva", Price: 14000},
 }
 
+// InitBot initializes the Telegram bot
+func InitBot(botToken string) (*tgbotapi.BotAPI, error) {
+	bot, err := tgbotapi.NewBotAPI(botToken)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create bot: %v", err)
+	}
+
+	bot.Debug = true // Enable debugging
+	fmt.Printf("Authorized on account %s\n", bot.Self.UserName)
+
+	return bot, nil
+}
+
 // StartBot initializes and runs the Telegram bot
 func StartBot(botToken string, db *sql.DB) {
 	bot, err := tgbotapi.NewBotAPI(botToken)
@@ -133,8 +146,21 @@ func HandleStart(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *sql.DB) {
 		),
 	)
 	msg.ReplyMarkup = replyMarkup
-
 	bot.Send(msg)
+
+	// Now send another message with an inline keyboard that has the Mini App link
+	inlineMsg := tgbotapi.NewMessage(update.Message.Chat.ID, "🛍️ You can also order through our convenient Mini App:")
+
+	// Create an inline keyboard with a URL button
+	miniAppURL := "https://your-mini-app-url.example.com" // Replace with your hosted Mini App URL
+	inlineKeyboard := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonURL("🛍️ Open Food Store", miniAppURL),
+		),
+	)
+
+	inlineMsg.ReplyMarkup = inlineKeyboard
+	bot.Send(inlineMsg)
 }
 
 // handleMenu retrieves available meals from the database
